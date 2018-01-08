@@ -1,0 +1,132 @@
+""" The main python script to run in the command shell to get scrapr analyse data from NewYork Times or Flickr """
+import sys
+import json
+import requests
+import pandas as pd
+
+from Article import Article
+from Photo import Photo
+
+NY_KEY = "dbe2804b0d0b426daa37d9686d9a17d8"
+FLICKR_KEY = "f7b40b1b42c128485cafc6e44ce9114d"
+
+##################### Get Data and Cache ##############################
+def get_from_nyt_caching(query):
+    """ Getting data from New York Times Article search API and caching """
+    baseurl = "https://api.nytimes.com/svc/search/v2/articlesearch.json"
+    params_diction = {
+        "api_key": NY_KEY,
+        "q": query,
+    }
+
+    resp = requests.get(baseurl, params=params_diction).json()
+    if resp["status"] == "OK":
+        try:
+            with open(CACHE_FNAME_NY, "w") as f:
+                json.dump(resp['response']["docs"], f)
+            return resp["response"]["docs"]
+        except IOError:
+            print("IOError in FUNCTION %s! Cannot open the file %s" % ("get_from_nyt_caching", CACHE_FNAME_NY), file=sys.stderr)
+            raise IOError
+    else:
+        print("HTTPERROR in FUNCTION %s! Cannot get infomation from NewYork Times API" % "get_from_nyt_caching", file=sys.stderr)
+        raise requests.HTTPError
+
+
+def get_from_flickr_caching(query):
+    """ Getting data from flickr and cache it """
+
+    baseurl = "https://api.flickr.com/services/rest/"
+    parameters = {
+        "api_key": FLICKR_KEY,
+        "tags": query,
+        "media": "photos",
+        "format": "json",
+        "method": "flickr.photos.search",
+    }
+    resp = json.loads(requests.get(baseurl, params=parameters).text[14:-1])
+    if resp["stat"] == "ok":
+        try:
+            with open(CACHE_FNAME_FLICKR % query, "w") as f:
+                json.dump(resp["photos"]["photo"], f)
+            return resp["photos"]["photo"]
+        except IOError:
+            print("IOError in FUNCTION %s! Cannot open the file %s" % ("get_from_flickr_caching",
+                                                                       CACHE_FNAME_FLICKR))
+            raise IOError
+    else:
+        print("HTTPERROR in FUNCTION %s! Cannot get infomation from NewYork Times API" % "get_from_flickr_caching", file=sys.stderr)
+        raise requests.HTTPError
+
+
+def get_extrainfo_from_flickr_caching(tag, photo_id, secret):
+    """ Get extra information from flickr """
+    baseurl = "https://api.flickr.com/services/rest/"
+    parameters = {
+        "api_key": FLICKR_KEY,
+        "photo_id": photo_id,
+        "method": "flickr.photos.getInfo",
+        "format": "json",
+        "secret": secret,
+    }
+
+    resp = json.loads(requests.get(baseurl, params=parameters).text[14:-1])
+    if resp["stat"] == "ok":
+        try:
+            with open(CACHE_FNAME_FLICKRINFO % tag, "w") as f:
+                json.dump(resp["photo"], f)
+            return resp["photo"]
+        except IOError:
+            print("IOError in FUNCTION %s! Cannot open the file %s" % ("get_from_flickr_caching",
+                                                                       CACHE_FNAME_FLICKRINFO))
+            raise IOError
+    else:
+        print("HTTPERROR in FUNCTION %s! Cannot get infomation from NewYork Times API" % "get_extrainfo_from_flickr_caching", file=sys.stderr)
+        raise requests.HTTPError
+
+# Main function
+if __name__ == "__main__":
+    # Get arguments from command line
+    assert len(sys.argv) <= 2, " Arguments number error! Expected less than 2, get %s" % len(sys.argv)
+
+    if len(sys.argv) == 2:
+        query_item = sys.argv[1]
+    else:
+        query_item = "mountains"
+
+    CACHE_FNAME_NY = "final_project_cached_data_%s.json" % query_item
+    CACHE_FNAME_FLICKR = "final_project_cached_data_flickr_%s.json"
+    CACHE_FNAME_FLICKRINFO = "final_project_cached_data_flickr_%s_detailed.json"
+
+    # Get and Cache (If needed) Data
+    try:
+        print("Try to get data from current directory...")
+        with open(CACHE_FNAME_NY, 'r') as cache_file:
+            CACHE_DICTION = json.load(cache_file)
+    except IOError:
+        print("Cannot find cache file %s, getting data online..." % CACHE_FNAME_NY)
+        CACHE_DICTION = get_from_nyt_caching(query_item)
+
+    print("Got Data!")
+
+    # Analyze Article
+    articles = []
+    for article in CACHE_DICTION:
+        articles.append(Article(article))
+    articles = sorted(articles, key=lambda x: (len(x.get_keywords()), x.get_title()), reverse=True)
+
+
+    # print the longest words
+    for article in articles:
+        photos = []
+        word = article.longest_word_in_abstract()
+        print(word)
+        result = get_from_flickr_caching(word)
+        for photo in result:
+            photos.append(Photo(get_extrainfo_from_flickr_caching(word,
+                                                                  photo["id"],
+                                                                  photo["secret"])))
+
+        photos = sorted(photos, key=lambda x: x.get_tags_number(), reverse=True)
+        photos_info = pd.DataFrame.from_records([photo.to_dict() for photo in photos])
+        photos_info.to_csv("Photo_Records_%s.csv" % word, columns=["user", "title", "tags", "num_of_tags", "description"])
